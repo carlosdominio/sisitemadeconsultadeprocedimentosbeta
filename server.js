@@ -1,10 +1,10 @@
 const express = require('express');
-const sqlite3 = require('sqlite3').verbose();
+const { Pool } = require('pg');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors());
@@ -12,59 +12,62 @@ app.use(bodyParser.json());
 app.use(express.static('.'));
 
 // Database
-const db = new sqlite3.Database('./database.db');
-
-// Initialize database
-db.serialize(() => {
-    db.run(`CREATE TABLE IF NOT EXISTS clients (
-        id INTEGER PRIMARY KEY,
-        name TEXT
-    )`);
-
-    db.run(`CREATE TABLE IF NOT EXISTS client_procedures (
-        id INTEGER PRIMARY KEY,
-        client_id INTEGER,
-        procedure_text TEXT,
-        FOREIGN KEY (client_id) REFERENCES clients (id)
-    )`);
-
-    db.run(`CREATE TABLE IF NOT EXISTS providers (
-        id INTEGER PRIMARY KEY,
-        name TEXT,
-        image TEXT
-    )`);
-
-    db.run(`CREATE TABLE IF NOT EXISTS provider_procedures (
-        id INTEGER PRIMARY KEY,
-        provider_id INTEGER,
-        sinistro_type TEXT,
-        procedure_text TEXT,
-        FOREIGN KEY (provider_id) REFERENCES providers (id)
-    )`);
-
-    db.run(`CREATE TABLE IF NOT EXISTS additional_provider_procedures (
-        id INTEGER PRIMARY KEY,
-        provider_id INTEGER,
-        sinistro_type TEXT,
-        procedure_text TEXT,
-        FOREIGN KEY (provider_id) REFERENCES providers (id)
-    )`);
-
-    db.run(`CREATE TABLE IF NOT EXISTS sinistro_procedures (
-        id INTEGER PRIMARY KEY,
-        sinistro_type TEXT,
-        procedure_text TEXT
-    )`);
-
-    // Insert default data if not exists
-    db.get("SELECT COUNT(*) as count FROM clients", (err, row) => {
-        if (row.count === 0) {
-            insertDefaultData();
-        }
-    });
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
 });
 
-function insertDefaultData() {
+// Initialize database
+(async () => {
+    try {
+        await pool.query(`CREATE TABLE IF NOT EXISTS clients (
+            id SERIAL PRIMARY KEY,
+            name TEXT
+        )`);
+
+        await pool.query(`CREATE TABLE IF NOT EXISTS client_procedures (
+            id SERIAL PRIMARY KEY,
+            client_id INTEGER REFERENCES clients (id),
+            procedure_text TEXT
+        )`);
+
+        await pool.query(`CREATE TABLE IF NOT EXISTS providers (
+            id SERIAL PRIMARY KEY,
+            name TEXT,
+            image TEXT
+        )`);
+
+        await pool.query(`CREATE TABLE IF NOT EXISTS provider_procedures (
+            id SERIAL PRIMARY KEY,
+            provider_id INTEGER REFERENCES providers (id),
+            sinistro_type TEXT,
+            procedure_text TEXT
+        )`);
+
+        await pool.query(`CREATE TABLE IF NOT EXISTS additional_provider_procedures (
+            id SERIAL PRIMARY KEY,
+            provider_id INTEGER REFERENCES providers (id),
+            sinistro_type TEXT,
+            procedure_text TEXT
+        )`);
+
+        await pool.query(`CREATE TABLE IF NOT EXISTS sinistro_procedures (
+            id SERIAL PRIMARY KEY,
+            sinistro_type TEXT,
+            procedure_text TEXT
+        )`);
+
+        // Insert default data if not exists
+        const result = await pool.query("SELECT COUNT(*) as count FROM clients");
+        if (parseInt(result.rows[0].count) === 0) {
+            await insertDefaultData();
+        }
+    } catch (err) {
+        console.error('Error initializing database:', err);
+    }
+})();
+
+async function insertDefaultData() {
     const clients = [
         { id: 1, name: 'Cliente A', procedures: ['Contato inicial', 'Análise de requisitos', 'Proposta', 'Negociação', 'Fechamento'] },
         { id: 2, name: 'Cliente B', procedures: ['Reunião de briefing', 'Desenvolvimento', 'Testes', 'Entrega'] },
@@ -92,203 +95,237 @@ function insertDefaultData() {
         { sinistro_type: 'exclusoes', procedure_text: 'Documentar decisão' }
     ];
 
-    clients.forEach(client => {
-        db.run("INSERT INTO clients (id, name) VALUES (?, ?)", [client.id, client.name]);
-        client.procedures.forEach(proc => {
-            db.run("INSERT INTO client_procedures (client_id, procedure_text) VALUES (?, ?)", [client.id, proc]);
-        });
-    });
-
-    providers.forEach(provider => {
-        db.run("INSERT INTO providers (id, name, image) VALUES (?, ?, ?)", [provider.id, provider.name, provider.image]);
-        for (let sinistro in provider.procedures) {
-            provider.procedures[sinistro].forEach(proc => {
-                db.run("INSERT INTO provider_procedures (provider_id, sinistro_type, procedure_text) VALUES (?, ?, ?)", [provider.id, sinistro, proc]);
-            });
+    for (const client of clients) {
+        await pool.query("INSERT INTO clients (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING", [client.id, client.name]);
+        for (const proc of client.procedures) {
+            await pool.query("INSERT INTO client_procedures (client_id, procedure_text) VALUES ($1, $2)", [client.id, proc]);
         }
-        for (let sinistro in provider.additionalProcedures) {
-            provider.additionalProcedures[sinistro].forEach(proc => {
-                db.run("INSERT INTO additional_provider_procedures (provider_id, sinistro_type, procedure_text) VALUES (?, ?, ?)", [provider.id, sinistro, proc]);
-            });
-        }
-    });
+    }
 
-    sinistroProcedures.forEach(proc => {
-        db.run("INSERT INTO sinistro_procedures (sinistro_type, procedure_text) VALUES (?, ?)", [proc.sinistro_type, proc.procedure_text]);
-    });
+    for (const provider of providers) {
+        await pool.query("INSERT INTO providers (id, name, image) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING", [provider.id, provider.name, provider.image]);
+        for (const sinistro in provider.procedures) {
+            for (const proc of provider.procedures[sinistro]) {
+                await pool.query("INSERT INTO provider_procedures (provider_id, sinistro_type, procedure_text) VALUES ($1, $2, $3)", [provider.id, sinistro, proc]);
+            }
+        }
+        for (const sinistro in provider.additionalProcedures) {
+            for (const proc of provider.additionalProcedures[sinistro]) {
+                await pool.query("INSERT INTO additional_provider_procedures (provider_id, sinistro_type, procedure_text) VALUES ($1, $2, $3)", [provider.id, sinistro, proc]);
+            }
+        }
+    }
+
+    for (const proc of sinistroProcedures) {
+        await pool.query("INSERT INTO sinistro_procedures (sinistro_type, procedure_text) VALUES ($1, $2)", [proc.sinistro_type, proc.procedure_text]);
+    }
 }
 
 // Routes
-app.get('/api/clients', (req, res) => {
-    db.all("SELECT * FROM clients", (err, rows) => {
-        if (err) return res.status(500).json({error: err.message});
-        res.json(rows);
-    });
+app.get('/api/clients', async (req, res) => {
+    try {
+        const result = await pool.query("SELECT * FROM clients");
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({error: err.message});
+    }
 });
 
-app.get('/api/clients/:id/procedures', (req, res) => {
-    const clientId = req.params.id;
-    db.all("SELECT * FROM client_procedures WHERE client_id = ?", [clientId], (err, rows) => {
-        if (err) return res.status(500).json({error: err.message});
-        res.json(rows);
-    });
+app.get('/api/clients/:id/procedures', async (req, res) => {
+    try {
+        const result = await pool.query("SELECT * FROM client_procedures WHERE client_id = $1", [req.params.id]);
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({error: err.message});
+    }
 });
 
-app.get('/api/providers', (req, res) => {
-    db.all("SELECT * FROM providers", (err, rows) => {
-        if (err) return res.status(500).json({error: err.message});
-        res.json(rows);
-    });
+app.get('/api/providers', async (req, res) => {
+    try {
+        const result = await pool.query("SELECT * FROM providers");
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({error: err.message});
+    }
 });
 
-app.get('/api/providers/:id/procedures/:sinistro', (req, res) => {
-    const providerId = req.params.id;
-    const sinistro = req.params.sinistro;
-    db.all("SELECT * FROM provider_procedures WHERE provider_id = ? AND sinistro_type = ?", [providerId, sinistro], (err, rows) => {
-        if (err) return res.status(500).json({error: err.message});
-        res.json(rows);
-    });
+app.get('/api/providers/:id/procedures/:sinistro', async (req, res) => {
+    try {
+        const result = await pool.query("SELECT * FROM provider_procedures WHERE provider_id = $1 AND sinistro_type = $2", [req.params.id, req.params.sinistro]);
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({error: err.message});
+    }
 });
 
-app.get('/api/providers/:id/additional-procedures/:sinistro', (req, res) => {
-    const providerId = req.params.id;
-    const sinistro = req.params.sinistro;
-    db.all("SELECT * FROM additional_provider_procedures WHERE provider_id = ? AND sinistro_type = ?", [providerId, sinistro], (err, rows) => {
-        if (err) return res.status(500).json({error: err.message});
-        res.json(rows);
-    });
+app.get('/api/providers/:id/additional-procedures/:sinistro', async (req, res) => {
+    try {
+        const result = await pool.query("SELECT * FROM additional_provider_procedures WHERE provider_id = $1 AND sinistro_type = $2", [req.params.id, req.params.sinistro]);
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({error: err.message});
+    }
 });
 
 // Add provider
-app.post('/api/providers', (req, res) => {
-    const { name, image } = req.body;
-    db.run("INSERT INTO providers (name, image) VALUES (?, ?)", [name, image || ''], function(err) {
-        if (err) return res.status(500).json({error: err.message});
-        res.json({id: this.lastID});
-    });
+app.post('/api/providers', async (req, res) => {
+    try {
+        const { name, image } = req.body;
+        const result = await pool.query("INSERT INTO providers (name, image) VALUES ($1, $2) RETURNING id", [name, image || '']);
+        res.json({id: result.rows[0].id});
+    } catch (err) {
+        res.status(500).json({error: err.message});
+    }
 });
 
 // Edit provider
-app.put('/api/providers/:id', (req, res) => {
-    const { name, image } = req.body;
-    db.run("UPDATE providers SET name = ?, image = ? WHERE id = ?", [name, image || '', req.params.id], function(err) {
-        if (err) return res.status(500).json({error: err.message});
-        res.json({changes: this.changes});
-    });
+app.put('/api/providers/:id', async (req, res) => {
+    try {
+        const { name, image } = req.body;
+        const result = await pool.query("UPDATE providers SET name = $1, image = $2 WHERE id = $3", [name, image || '', req.params.id]);
+        res.json({changes: result.rowCount});
+    } catch (err) {
+        res.status(500).json({error: err.message});
+    }
 });
 
 // Delete provider
-app.delete('/api/providers/:id', (req, res) => {
-    db.run("DELETE FROM providers WHERE id = ?", [req.params.id], function(err) {
-        if (err) return res.status(500).json({error: err.message});
-        res.json({changes: this.changes});
-    });
+app.delete('/api/providers/:id', async (req, res) => {
+    try {
+        const result = await pool.query("DELETE FROM providers WHERE id = $1", [req.params.id]);
+        res.json({changes: result.rowCount});
+    } catch (err) {
+        res.status(500).json({error: err.message});
+    }
 });
 
 // Add client
-app.post('/api/clients', (req, res) => {
-    const { name } = req.body;
-    db.run("INSERT INTO clients (name) VALUES (?)", [name], function(err) {
-        if (err) return res.status(500).json({error: err.message});
-        res.json({id: this.lastID});
-    });
+app.post('/api/clients', async (req, res) => {
+    try {
+        const { name } = req.body;
+        const result = await pool.query("INSERT INTO clients (name) VALUES ($1) RETURNING id", [name]);
+        res.json({id: result.rows[0].id});
+    } catch (err) {
+        res.status(500).json({error: err.message});
+    }
 });
 
 // Edit client
-app.put('/api/clients/:id', (req, res) => {
-    const { name } = req.body;
-    db.run("UPDATE clients SET name = ? WHERE id = ?", [name, req.params.id], function(err) {
-        if (err) return res.status(500).json({error: err.message});
-        res.json({changes: this.changes});
-    });
+app.put('/api/clients/:id', async (req, res) => {
+    try {
+        const { name } = req.body;
+        const result = await pool.query("UPDATE clients SET name = $1 WHERE id = $2", [name, req.params.id]);
+        res.json({changes: result.rowCount});
+    } catch (err) {
+        res.status(500).json({error: err.message});
+    }
 });
 
 // Delete client
-app.delete('/api/clients/:id', (req, res) => {
-    db.run("DELETE FROM clients WHERE id = ?", [req.params.id], function(err) {
-        if (err) return res.status(500).json({error: err.message});
-        // Also delete procedures
-        db.run("DELETE FROM client_procedures WHERE client_id = ?", [req.params.id]);
-        res.json({changes: this.changes});
-    });
+app.delete('/api/clients/:id', async (req, res) => {
+    try {
+        await pool.query("DELETE FROM client_procedures WHERE client_id = $1", [req.params.id]);
+        const result = await pool.query("DELETE FROM clients WHERE id = $1", [req.params.id]);
+        res.json({changes: result.rowCount});
+    } catch (err) {
+        res.status(500).json({error: err.message});
+    }
 });
 
 // Add client procedure
-app.post('/api/clients/:id/procedures', (req, res) => {
-    const { procedure_text } = req.body;
-    db.run("INSERT INTO client_procedures (client_id, procedure_text) VALUES (?, ?)", [req.params.id, procedure_text], function(err) {
-        if (err) return res.status(500).json({error: err.message});
-        res.json({id: this.lastID});
-    });
+app.post('/api/clients/:id/procedures', async (req, res) => {
+    try {
+        const { procedure_text } = req.body;
+        const result = await pool.query("INSERT INTO client_procedures (client_id, procedure_text) VALUES ($1, $2) RETURNING id", [req.params.id, procedure_text]);
+        res.json({id: result.rows[0].id});
+    } catch (err) {
+        res.status(500).json({error: err.message});
+    }
 });
 
 // Edit client procedure
-app.put('/api/clients/:id/procedures/:procId', (req, res) => {
-    const { procedure_text } = req.body;
-    db.run("UPDATE client_procedures SET procedure_text = ? WHERE id = ? AND client_id = ?", [procedure_text, req.params.procId, req.params.id], function(err) {
-        if (err) return res.status(500).json({error: err.message});
-        res.json({changes: this.changes});
-    });
+app.put('/api/clients/:id/procedures/:procId', async (req, res) => {
+    try {
+        const { procedure_text } = req.body;
+        const result = await pool.query("UPDATE client_procedures SET procedure_text = $1 WHERE id = $2 AND client_id = $3", [procedure_text, req.params.procId, req.params.id]);
+        res.json({changes: result.rowCount});
+    } catch (err) {
+        res.status(500).json({error: err.message});
+    }
 });
 
 // Delete client procedure
-app.delete('/api/clients/:id/procedures/:procId', (req, res) => {
-    db.run("DELETE FROM client_procedures WHERE id = ? AND client_id = ?", [req.params.procId, req.params.id], function(err) {
-        if (err) return res.status(500).json({error: err.message});
-        res.json({changes: this.changes});
-    });
+app.delete('/api/clients/:id/procedures/:procId', async (req, res) => {
+    try {
+        const result = await pool.query("DELETE FROM client_procedures WHERE id = $1 AND client_id = $2", [req.params.procId, req.params.id]);
+        res.json({changes: result.rowCount});
+    } catch (err) {
+        res.status(500).json({error: err.message});
+    }
 });
 
 // Add provider procedure
-app.post('/api/providers/:id/procedures/:sinistro', (req, res) => {
-    const { procedure_text } = req.body;
-    db.run("INSERT INTO provider_procedures (provider_id, sinistro_type, procedure_text) VALUES (?, ?, ?)", [req.params.id, req.params.sinistro, procedure_text], function(err) {
-        if (err) return res.status(500).json({error: err.message});
-        res.json({id: this.lastID});
-    });
+app.post('/api/providers/:id/procedures/:sinistro', async (req, res) => {
+    try {
+        const { procedure_text } = req.body;
+        const result = await pool.query("INSERT INTO provider_procedures (provider_id, sinistro_type, procedure_text) VALUES ($1, $2, $3) RETURNING id", [req.params.id, req.params.sinistro, procedure_text]);
+        res.json({id: result.rows[0].id});
+    } catch (err) {
+        res.status(500).json({error: err.message});
+    }
 });
 
 // Edit provider procedure
-app.put('/api/providers/:id/procedures/:procId', (req, res) => {
-    const { procedure_text } = req.body;
-    db.run("UPDATE provider_procedures SET procedure_text = ? WHERE id = ? AND provider_id = ?", [procedure_text, req.params.procId, req.params.id], function(err) {
-        if (err) return res.status(500).json({error: err.message});
-        res.json({changes: this.changes});
-    });
+app.put('/api/providers/:id/procedures/:procId', async (req, res) => {
+    try {
+        const { procedure_text } = req.body;
+        const result = await pool.query("UPDATE provider_procedures SET procedure_text = $1 WHERE id = $2 AND provider_id = $3", [procedure_text, req.params.procId, req.params.id]);
+        res.json({changes: result.rowCount});
+    } catch (err) {
+        res.status(500).json({error: err.message});
+    }
 });
 
 // Delete provider procedure
-app.delete('/api/providers/:id/procedures/:procId', (req, res) => {
-    db.run("DELETE FROM provider_procedures WHERE id = ? AND provider_id = ?", [req.params.procId, req.params.id], function(err) {
-        if (err) return res.status(500).json({error: err.message});
-        res.json({changes: this.changes});
-    });
+app.delete('/api/providers/:id/procedures/:procId', async (req, res) => {
+    try {
+        const result = await pool.query("DELETE FROM provider_procedures WHERE id = $1 AND provider_id = $2", [req.params.procId, req.params.id]);
+        res.json({changes: result.rowCount});
+    } catch (err) {
+        res.status(500).json({error: err.message});
+    }
 });
 
 // Add additional provider procedure
-app.post('/api/providers/:id/additional-procedures/:sinistro', (req, res) => {
-    const { procedure_text } = req.body;
-    db.run("INSERT INTO additional_provider_procedures (provider_id, sinistro_type, procedure_text) VALUES (?, ?, ?)", [req.params.id, req.params.sinistro, procedure_text], function(err) {
-        if (err) return res.status(500).json({error: err.message});
-        res.json({id: this.lastID});
-    });
+app.post('/api/providers/:id/additional-procedures/:sinistro', async (req, res) => {
+    try {
+        const { procedure_text } = req.body;
+        const result = await pool.query("INSERT INTO additional_provider_procedures (provider_id, sinistro_type, procedure_text) VALUES ($1, $2, $3) RETURNING id", [req.params.id, req.params.sinistro, procedure_text]);
+        res.json({id: result.rows[0].id});
+    } catch (err) {
+        res.status(500).json({error: err.message});
+    }
 });
 
 // Edit additional provider procedure
-app.put('/api/providers/:id/additional-procedures/:procId', (req, res) => {
-    const { procedure_text } = req.body;
-    db.run("UPDATE additional_provider_procedures SET procedure_text = ? WHERE id = ? AND provider_id = ?", [procedure_text, req.params.procId, req.params.id], function(err) {
-        if (err) return res.status(500).json({error: err.message});
-        res.json({changes: this.changes});
-    });
+app.put('/api/providers/:id/additional-procedures/:procId', async (req, res) => {
+    try {
+        const { procedure_text } = req.body;
+        const result = await pool.query("UPDATE additional_provider_procedures SET procedure_text = $1 WHERE id = $2 AND provider_id = $3", [procedure_text, req.params.procId, req.params.id]);
+        res.json({changes: result.rowCount});
+    } catch (err) {
+        res.status(500).json({error: err.message});
+    }
 });
 
 // Delete additional provider procedure
-app.delete('/api/providers/:id/additional-procedures/:procId', (req, res) => {
-    db.run("DELETE FROM additional_provider_procedures WHERE id = ? AND provider_id = ?", [req.params.procId, req.params.id], function(err) {
-        if (err) return res.status(500).json({error: err.message});
-        res.json({changes: this.changes});
-    });
+app.delete('/api/providers/:id/additional-procedures/:procId', async (req, res) => {
+    try {
+        const result = await pool.query("DELETE FROM additional_provider_procedures WHERE id = $1 AND provider_id = $2", [req.params.procId, req.params.id]);
+        res.json({changes: result.rowCount});
+    } catch (err) {
+        res.status(500).json({error: err.message});
+    }
 });
 
 app.listen(port, () => {
