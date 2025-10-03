@@ -1,10 +1,11 @@
+index_1758654838757.html
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sistema de Consulta de Procedimentos</title>
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <h1>Sistema de Consulta de Procedimentos de Cliente</h1>
@@ -31,7 +32,6 @@
         </select>
         <button id="addProviderBtn">Adicionar Prestador</button>
         <button id="editProviderBtn">Editar Nome do Prestador</button>
-
         <button id="deleteProviderBtn">Excluir Prestador</button>
 
         <label for="sinistroSelect">Selecione um tipo de sinistro:</label>
@@ -59,6 +59,31 @@
             <button id="deleteProviderProcedureBtn">Remover Procedimento</button>
         </div>
     </div>
+
+    <!-- Modal -->
+    <div id="modal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h2 id="modalTitle">Adicionar Procedimento</h2>
+            <div class="editor-toolbar">
+                <button id="boldBtn">Negrito</button>
+                <button id="italicBtn">Itálico</button>
+                <button id="underlineBtn">Sublinhado</button>
+                <select id="fontSizeSelect">
+                    <option value="1">Tamanho 1</option>
+                    <option value="2">Tamanho 2</option>
+                    <option value="3" selected>Tamanho 3</option>
+                    <option value="4">Tamanho 4</option>
+                    <option value="5">Tamanho 5</option>
+                </select>
+                <input type="color" id="colorPicker" value="#000000">
+            </div>
+            <div id="modalInput" contenteditable="true" placeholder="Digite o texto do procedimento"></div>
+            <button id="modalSave">Salvar</button>
+            <button id="modalCancel">Cancelar</button>
+        </div>
+    </div>
+
     <script src="app.js"></script>
 </body>
 </html>

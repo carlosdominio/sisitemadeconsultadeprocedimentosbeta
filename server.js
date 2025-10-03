@@ -1,299 +1,296 @@
 const express = require('express');
-const path = require('path');
-const { Pool } = require('pg');
+const sqlite3 = require('sqlite3').verbose();
+const bodyParser = require('body-parser');
+const cors = require('cors');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const port = 3000;
 
-// Middleware para parsear JSON no corpo das requisições
-app.use(express.json());
+// Middleware
+app.use(cors());
+app.use(bodyParser.json());
+app.use(express.static('.'));
 
-// Configuração do Pool de Conexões com o PostgreSQL
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false
-  }
-});
+// Database
+const db = new sqlite3.Database('./database.db');
 
-// Função para criar as tabelas no banco de dados se não existirem
-const createTables = async () => {
-  const clientTableQuery = `
-    CREATE TABLE IF NOT EXISTS clients (
-      id SERIAL PRIMARY KEY,
-      name VARCHAR(255) NOT NULL
-    );
-  `;
-  const procedureTableQuery = `
-    CREATE TABLE IF NOT EXISTS procedures (
-      id SERIAL PRIMARY KEY,
-      client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
-      procedure_text TEXT NOT NULL
-    );
-  `;
-  const providerTableQuery = `
-    CREATE TABLE IF NOT EXISTS providers (
-      id SERIAL PRIMARY KEY,
-      name VARCHAR(255) NOT NULL
-    );
-  `;
-  const providerProcedureTableQuery = `
-    CREATE TABLE IF NOT EXISTS provider_procedures (
-      id SERIAL PRIMARY KEY,
-      provider_id INTEGER REFERENCES providers(id) ON DELETE CASCADE,
-      sinistro_type VARCHAR(255) NOT NULL,
-      procedure_text TEXT NOT NULL
-    );
-  `;
-  try {
-    await pool.query(clientTableQuery);
-    await pool.query(procedureTableQuery);
-    await pool.query(providerTableQuery);
-    await pool.query(providerProcedureTableQuery);
-    console.log('Tabelas verificadas/criadas com sucesso.');
-  } catch (err) {
-    console.error('Erro ao criar as tabelas', err.stack);
-  }
-};
+// Initialize database
+db.serialize(() => {
+    db.run(`CREATE TABLE IF NOT EXISTS clients (
+        id INTEGER PRIMARY KEY,
+        name TEXT
+    )`);
 
-// --- ROTAS DA API ---
+    db.run(`CREATE TABLE IF NOT EXISTS client_procedures (
+        id INTEGER PRIMARY KEY,
+        client_id INTEGER,
+        procedure_text TEXT,
+        FOREIGN KEY (client_id) REFERENCES clients (id)
+    )`);
 
-// CLIENTS
-app.get('/api/clients', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT * FROM clients ORDER BY name');
-    res.json(result.rows);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Erro ao buscar clientes' });
-  }
-});
+    db.run(`CREATE TABLE IF NOT EXISTS providers (
+        id INTEGER PRIMARY KEY,
+        name TEXT,
+        image TEXT
+    )`);
 
-app.post('/api/clients', async (req, res) => {
-    const { name } = req.body;
-    if (!name) {
-        return res.status(400).json({ error: 'O nome do cliente é obrigatório' });
-    }
-    try {
-        const result = await pool.query('INSERT INTO clients (name) VALUES ($1) RETURNING *', [name]);
-        res.status(201).json(result.rows[0]);
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Erro ao adicionar cliente' });
-    }
-});
+    db.run(`CREATE TABLE IF NOT EXISTS provider_procedures (
+        id INTEGER PRIMARY KEY,
+        provider_id INTEGER,
+        sinistro_type TEXT,
+        procedure_text TEXT,
+        FOREIGN KEY (provider_id) REFERENCES providers (id)
+    )`);
 
-app.patch('/api/clients/:id', async (req, res) => {
-    const { id } = req.params;
-    const { name } = req.body;
-    if (!name) {
-        return res.status(400).json({ error: 'O nome do cliente é obrigatório' });
-    }
-    try {
-        const result = await pool.query(
-            'UPDATE clients SET name = $1 WHERE id = $2 RETURNING *',
-            [name, id]
-        );
-        if (result.rows.length === 0) {
-            return res.status(404).json({ error: 'Cliente não encontrado' });
+    db.run(`CREATE TABLE IF NOT EXISTS additional_provider_procedures (
+        id INTEGER PRIMARY KEY,
+        provider_id INTEGER,
+        sinistro_type TEXT,
+        procedure_text TEXT,
+        FOREIGN KEY (provider_id) REFERENCES providers (id)
+    )`);
+
+    db.run(`CREATE TABLE IF NOT EXISTS sinistro_procedures (
+        id INTEGER PRIMARY KEY,
+        sinistro_type TEXT,
+        procedure_text TEXT
+    )`);
+
+    // Insert default data if not exists
+    db.get("SELECT COUNT(*) as count FROM clients", (err, row) => {
+        if (row.count === 0) {
+            insertDefaultData();
         }
-        res.json(result.rows[0]);
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Erro ao editar cliente' });
-    }
+    });
 });
 
-// PROVIDERS
-app.get('/api/providers', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT * FROM providers ORDER BY name');
-    res.json(result.rows);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Erro ao buscar prestadores' });
-  }
-});
+function insertDefaultData() {
+    const clients = [
+        { id: 1, name: 'Cliente A', procedures: ['Contato inicial', 'Análise de requisitos', 'Proposta', 'Negociação', 'Fechamento'] },
+        { id: 2, name: 'Cliente B', procedures: ['Reunião de briefing', 'Desenvolvimento', 'Testes', 'Entrega'] },
+        { id: 3, name: 'Cliente C', procedures: ['Avaliação', 'Planejamento', 'Execução', 'Acompanhamento'] }
+    ];
 
-app.post('/api/providers', async (req, res) => {
-    const { name } = req.body;
-    if (!name) {
-        return res.status(400).json({ error: 'O nome do prestador é obrigatório' });
-    }
-    try {
-        const result = await pool.query('INSERT INTO providers (name) VALUES ($1) RETURNING *', [name]);
-        res.status(201).json(result.rows[0]);
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Erro ao adicionar prestador' });
-    }
-});
+    const providers = [
+        { id: 1, name: 'Prestador X', image: '', procedures: { acidentes: ['Avaliação de danos', 'Contato com cliente', 'Relatório de acidente'], avarias: ['Inspeção visual', 'Fotografia de avarias', 'Orçamento de reparo'], roubo: ['Verificação de documentos', 'Contato com polícia', 'Bloqueio de bens'], exclusoes: ['Análise contratual', 'Consulta jurídica', 'Decisão de cobertura'] }, additionalProcedures: { acidentes: ['Revisão', 'Aprovação'], avarias: [], roubo: [], exclusoes: [] } },
+        { id: 2, name: 'Prestador Y', image: '', procedures: { acidentes: ['Registro do sinistro', 'Avaliação médica', 'Processamento de indenização'], avarias: ['Avaliação técnica', 'Negociação com oficinas', 'Acompanhamento de reparos'], roubo: ['Investigação preliminar', 'Verificação de seguros', 'Liberação de valores'], exclusoes: ['Revisão de cláusulas', 'Parecer técnico', 'Comunicação ao cliente'] }, additionalProcedures: { acidentes: ['Treinamento', 'Manutenção'], avarias: [], roubo: [], exclusoes: [] } },
+        { id: 3, name: 'Prestador Z', image: '', procedures: { acidentes: ['Análise de responsabilidade', 'Cálculo de prejuízos', 'Pagamento de indenização'], avarias: ['Perícia especializada', 'Definição de reparos', 'Controle de qualidade'], roubo: ['Análise de risco', 'Recuperação de bens', 'Compensação financeira'], exclusoes: ['Auditoria contratual', 'Decisão final', 'Arquivamento do caso'] }, additionalProcedures: { acidentes: ['Suporte pós-venda', 'Atualizações'], avarias: [], roubo: [], exclusoes: [] } }
+    ];
 
-app.delete('/api/providers/:id', async (req, res) => {
-    const { id } = req.params;
-    try {
-        await pool.query('DELETE FROM providers WHERE id = $1', [id]);
-        res.status(204).send(); // 204 No Content
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Erro ao remover prestador' });
-    }
-});
+    const sinistroProcedures = [
+        { sinistro_type: 'acidentes', procedure_text: 'Notificar imediatamente' },
+        { sinistro_type: 'acidentes', procedure_text: 'Documentar o acidente' },
+        { sinistro_type: 'acidentes', procedure_text: 'Contato com autoridades' },
+        { sinistro_type: 'avarias', procedure_text: 'Avaliar danos' },
+        { sinistro_type: 'avarias', procedure_text: 'Fotografar avarias' },
+        { sinistro_type: 'avarias', procedure_text: 'Solicitar orçamento' },
+        { sinistro_type: 'roubo', procedure_text: 'Registrar boletim de ocorrência' },
+        { sinistro_type: 'roubo', procedure_text: 'Bloquear cartões/bens' },
+        { sinistro_type: 'roubo', procedure_text: 'Notificar seguradora' },
+        { sinistro_type: 'exclusoes', procedure_text: 'Verificar cláusulas contratuais' },
+        { sinistro_type: 'exclusoes', procedure_text: 'Consultar especialista' },
+        { sinistro_type: 'exclusoes', procedure_text: 'Documentar decisão' }
+    ];
 
-app.patch('/api/providers/:id', async (req, res) => {
-    const { id } = req.params;
-    const { name } = req.body;
-    if (!name) {
-        return res.status(400).json({ error: 'O nome do prestador é obrigatório' });
-    }
-    try {
-        const result = await pool.query(
-            'UPDATE providers SET name = $1 WHERE id = $2 RETURNING *',
-            [name, id]
-        );
-        if (result.rows.length === 0) {
-            return res.status(404).json({ error: 'Prestador não encontrado' });
+    clients.forEach(client => {
+        db.run("INSERT INTO clients (id, name) VALUES (?, ?)", [client.id, client.name]);
+        client.procedures.forEach(proc => {
+            db.run("INSERT INTO client_procedures (client_id, procedure_text) VALUES (?, ?)", [client.id, proc]);
+        });
+    });
+
+    providers.forEach(provider => {
+        db.run("INSERT INTO providers (id, name, image) VALUES (?, ?, ?)", [provider.id, provider.name, provider.image]);
+        for (let sinistro in provider.procedures) {
+            provider.procedures[sinistro].forEach(proc => {
+                db.run("INSERT INTO provider_procedures (provider_id, sinistro_type, procedure_text) VALUES (?, ?, ?)", [provider.id, sinistro, proc]);
+            });
         }
-        res.json(result.rows[0]);
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Erro ao editar prestador' });
-    }
+        for (let sinistro in provider.additionalProcedures) {
+            provider.additionalProcedures[sinistro].forEach(proc => {
+                db.run("INSERT INTO additional_provider_procedures (provider_id, sinistro_type, procedure_text) VALUES (?, ?, ?)", [provider.id, sinistro, proc]);
+            });
+        }
+    });
+
+    sinistroProcedures.forEach(proc => {
+        db.run("INSERT INTO sinistro_procedures (sinistro_type, procedure_text) VALUES (?, ?)", [proc.sinistro_type, proc.procedure_text]);
+    });
+}
+
+// Routes
+app.get('/api/clients', (req, res) => {
+    db.all("SELECT * FROM clients", (err, rows) => {
+        if (err) return res.status(500).json({error: err.message});
+        res.json(rows);
+    });
 });
 
-// PROVIDER PROCEDURES
-app.get('/api/providers/:providerId/procedures/:sinistroType', async (req, res) => {
-    const { providerId, sinistroType } = req.params;
-    try {
-        const result = await pool.query(
-            'SELECT * FROM provider_procedures WHERE provider_id = $1 AND sinistro_type = $2 ORDER BY id',
-            [providerId, sinistroType]
-        );
-        res.json(result.rows);
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Erro ao buscar procedimentos do prestador' });
-    }
+app.get('/api/clients/:id/procedures', (req, res) => {
+    const clientId = req.params.id;
+    db.all("SELECT * FROM client_procedures WHERE client_id = ?", [clientId], (err, rows) => {
+        if (err) return res.status(500).json({error: err.message});
+        res.json(rows);
+    });
 });
 
-app.post('/api/providers/:providerId/procedures', async (req, res) => {
-    const { providerId } = req.params;
-    const { sinistro_type, procedure_text } = req.body;
-    if (!sinistro_type || !procedure_text) {
-        return res.status(400).json({ error: 'Tipo de sinistro e texto do procedimento são obrigatórios' });
-    }
-    try {
-        const result = await pool.query(
-            'INSERT INTO provider_procedures (provider_id, sinistro_type, procedure_text) VALUES ($1, $2, $3) RETURNING *',
-            [providerId, sinistro_type, procedure_text]
-        );
-        res.status(201).json(result.rows[0]);
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Erro ao adicionar procedimento do prestador' });
-    }
+app.get('/api/providers', (req, res) => {
+    db.all("SELECT * FROM providers", (err, rows) => {
+        if (err) return res.status(500).json({error: err.message});
+        res.json(rows);
+    });
 });
 
-app.delete('/api/provider_procedures/:id', async (req, res) => {
-    const { id } = req.params;
-    try {
-        await pool.query('DELETE FROM provider_procedures WHERE id = $1', [id]);
-        res.status(204).send(); // 204 No Content
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Erro ao remover procedimento do prestador' });
-    }
+app.get('/api/providers/:id/procedures/:sinistro', (req, res) => {
+    const providerId = req.params.id;
+    const sinistro = req.params.sinistro;
+    db.all("SELECT * FROM provider_procedures WHERE provider_id = ? AND sinistro_type = ?", [providerId, sinistro], (err, rows) => {
+        if (err) return res.status(500).json({error: err.message});
+        res.json(rows);
+    });
 });
 
-app.patch('/api/provider_procedures/:id', async (req, res) => {
-    const { id } = req.params;
+app.get('/api/providers/:id/additional-procedures/:sinistro', (req, res) => {
+    const providerId = req.params.id;
+    const sinistro = req.params.sinistro;
+    db.all("SELECT * FROM additional_provider_procedures WHERE provider_id = ? AND sinistro_type = ?", [providerId, sinistro], (err, rows) => {
+        if (err) return res.status(500).json({error: err.message});
+        res.json(rows);
+    });
+});
+
+// Add provider
+app.post('/api/providers', (req, res) => {
+    const { name, image } = req.body;
+    db.run("INSERT INTO providers (name, image) VALUES (?, ?)", [name, image || ''], function(err) {
+        if (err) return res.status(500).json({error: err.message});
+        res.json({id: this.lastID});
+    });
+});
+
+// Edit provider
+app.put('/api/providers/:id', (req, res) => {
+    const { name, image } = req.body;
+    db.run("UPDATE providers SET name = ?, image = ? WHERE id = ?", [name, image || '', req.params.id], function(err) {
+        if (err) return res.status(500).json({error: err.message});
+        res.json({changes: this.changes});
+    });
+});
+
+// Delete provider
+app.delete('/api/providers/:id', (req, res) => {
+    db.run("DELETE FROM providers WHERE id = ?", [req.params.id], function(err) {
+        if (err) return res.status(500).json({error: err.message});
+        res.json({changes: this.changes});
+    });
+});
+
+// Add client
+app.post('/api/clients', (req, res) => {
+    const { name } = req.body;
+    db.run("INSERT INTO clients (name) VALUES (?)", [name], function(err) {
+        if (err) return res.status(500).json({error: err.message});
+        res.json({id: this.lastID});
+    });
+});
+
+// Edit client
+app.put('/api/clients/:id', (req, res) => {
+    const { name } = req.body;
+    db.run("UPDATE clients SET name = ? WHERE id = ?", [name, req.params.id], function(err) {
+        if (err) return res.status(500).json({error: err.message});
+        res.json({changes: this.changes});
+    });
+});
+
+// Delete client
+app.delete('/api/clients/:id', (req, res) => {
+    db.run("DELETE FROM clients WHERE id = ?", [req.params.id], function(err) {
+        if (err) return res.status(500).json({error: err.message});
+        // Also delete procedures
+        db.run("DELETE FROM client_procedures WHERE client_id = ?", [req.params.id]);
+        res.json({changes: this.changes});
+    });
+});
+
+// Add client procedure
+app.post('/api/clients/:id/procedures', (req, res) => {
     const { procedure_text } = req.body;
-    if (!procedure_text) {
-        return res.status(400).json({ error: 'O texto do procedimento é obrigatório' });
-    }
-    try {
-        const result = await pool.query(
-            'UPDATE provider_procedures SET procedure_text = $1 WHERE id = $2 RETURNING *',
-            [procedure_text, id]
-        );
-        if (result.rows.length === 0) {
-            return res.status(404).json({ error: 'Procedimento do prestador não encontrado' });
-        }
-        res.json(result.rows[0]);
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Erro ao editar procedimento do prestador' });
-    }
+    db.run("INSERT INTO client_procedures (client_id, procedure_text) VALUES (?, ?)", [req.params.id, procedure_text], function(err) {
+        if (err) return res.status(500).json({error: err.message});
+        res.json({id: this.lastID});
+    });
 });
 
-// CLIENT PROCEDURES
-app.get('/api/clients/:clientId/procedures', async (req, res) => {
-    const { clientId } = req.params;
-    try {
-        const result = await pool.query('SELECT * FROM procedures WHERE client_id = $1 ORDER BY id', [clientId]);
-        res.json(result.rows);
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Erro ao buscar procedimentos' });
-    }
-});
-
-app.post('/api/clients/:clientId/procedures', async (req, res) => {
-    const { clientId } = req.params;
+// Edit client procedure
+app.put('/api/clients/:id/procedures/:procId', (req, res) => {
     const { procedure_text } = req.body;
-    if (!procedure_text) {
-        return res.status(400).json({ error: 'O texto do procedimento é obrigatório' });
-    }
-    try {
-        const result = await pool.query('INSERT INTO procedures (client_id, procedure_text) VALUES ($1, $2) RETURNING *', [clientId, procedure_text]);
-        res.status(201).json(result.rows[0]);
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Erro ao adicionar procedimento' });
-    }
+    db.run("UPDATE client_procedures SET procedure_text = ? WHERE id = ? AND client_id = ?", [procedure_text, req.params.procId, req.params.id], function(err) {
+        if (err) return res.status(500).json({error: err.message});
+        res.json({changes: this.changes});
+    });
 });
 
-app.delete('/api/procedures/:id', async (req, res) => {
-    const { id } = req.params;
-    try {
-        await pool.query('DELETE FROM procedures WHERE id = $1', [id]);
-        res.status(204).send(); // 204 No Content
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Erro ao remover procedimento' });
-    }
+// Delete client procedure
+app.delete('/api/clients/:id/procedures/:procId', (req, res) => {
+    db.run("DELETE FROM client_procedures WHERE id = ? AND client_id = ?", [req.params.procId, req.params.id], function(err) {
+        if (err) return res.status(500).json({error: err.message});
+        res.json({changes: this.changes});
+    });
 });
 
-app.patch('/api/procedures/:id', async (req, res) => {
-    const { id } = req.params;
+// Add provider procedure
+app.post('/api/providers/:id/procedures/:sinistro', (req, res) => {
     const { procedure_text } = req.body;
-    if (!procedure_text) {
-        return res.status(400).json({ error: 'O texto do procedimento é obrigatório' });
-    }
-    try {
-        const result = await pool.query(
-            'UPDATE procedures SET procedure_text = $1 WHERE id = $2 RETURNING *',
-            [procedure_text, id]
-        );
-        if (result.rows.length === 0) {
-            return res.status(404).json({ error: 'Procedimento não encontrado' });
-        }
-        res.json(result.rows[0]);
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Erro ao editar procedimento' });
-    }
+    db.run("INSERT INTO provider_procedures (provider_id, sinistro_type, procedure_text) VALUES (?, ?, ?)", [req.params.id, req.params.sinistro, procedure_text], function(err) {
+        if (err) return res.status(500).json({error: err.message});
+        res.json({id: this.lastID});
+    });
 });
 
-// --- SERVIR ARQUIVOS ESTÁTICOS ---
-app.use(express.static(__dirname));
-
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'index.html'));
+// Edit provider procedure
+app.put('/api/providers/:id/procedures/:procId', (req, res) => {
+    const { procedure_text } = req.body;
+    db.run("UPDATE provider_procedures SET procedure_text = ? WHERE id = ? AND provider_id = ?", [procedure_text, req.params.procId, req.params.id], function(err) {
+        if (err) return res.status(500).json({error: err.message});
+        res.json({changes: this.changes});
+    });
 });
 
-// Inicia o servidor e cria as tabelas
-app.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
-  createTables();
+// Delete provider procedure
+app.delete('/api/providers/:id/procedures/:procId', (req, res) => {
+    db.run("DELETE FROM provider_procedures WHERE id = ? AND provider_id = ?", [req.params.procId, req.params.id], function(err) {
+        if (err) return res.status(500).json({error: err.message});
+        res.json({changes: this.changes});
+    });
+});
+
+// Add additional provider procedure
+app.post('/api/providers/:id/additional-procedures/:sinistro', (req, res) => {
+    const { procedure_text } = req.body;
+    db.run("INSERT INTO additional_provider_procedures (provider_id, sinistro_type, procedure_text) VALUES (?, ?, ?)", [req.params.id, req.params.sinistro, procedure_text], function(err) {
+        if (err) return res.status(500).json({error: err.message});
+        res.json({id: this.lastID});
+    });
+});
+
+// Edit additional provider procedure
+app.put('/api/providers/:id/additional-procedures/:procId', (req, res) => {
+    const { procedure_text } = req.body;
+    db.run("UPDATE additional_provider_procedures SET procedure_text = ? WHERE id = ? AND provider_id = ?", [procedure_text, req.params.procId, req.params.id], function(err) {
+        if (err) return res.status(500).json({error: err.message});
+        res.json({changes: this.changes});
+    });
+});
+
+// Delete additional provider procedure
+app.delete('/api/providers/:id/additional-procedures/:procId', (req, res) => {
+    db.run("DELETE FROM additional_provider_procedures WHERE id = ? AND provider_id = ?", [req.params.procId, req.params.id], function(err) {
+        if (err) return res.status(500).json({error: err.message});
+        res.json({changes: this.changes});
+    });
+});
+
+app.listen(port, () => {
+    console.log(`Server running on port ${port}`);
 });
