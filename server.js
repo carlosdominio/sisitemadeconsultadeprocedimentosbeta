@@ -11,6 +11,11 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(express.static('.'));
 
+// Routes
+app.get('/', (req, res) => {
+    res.sendFile(__dirname + '/index.html');
+});
+
 // Database
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
